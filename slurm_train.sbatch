@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=distr-accept
-#SBATCH --nodes=2
+#SBATCH --nodes=0
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=4
 #SBATCH --hint=nomultithread
-#SBATCH --gres=gpu:8
+#SBATCH --gres=gpu:0
 #SBATCH --output=logs/distr-accept_%j.out
 #SBATCH --error=logs/distr-accept_%j.err
 
@@ -13,10 +13,7 @@ mkdir -p logs
 
 MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
 MASTER_PORT=12345
-
 export OMP_NUM_THREADS=1
-GPUS_PER_NODE=8
-NNODES=2
 
 export LAUNCHER="python3 -u -m torch.distributed.launch \
     --nproc_per_node $GPUS_PER_NODE \
