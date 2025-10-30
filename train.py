@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 # train.py - minimal DeepSpeed-wrapped training on simulated binary data.
 
 import argparse
@@ -12,6 +13,7 @@ from deepspeed.accelerator import get_accelerator
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import TensorDataset
+
 
 def make_synthetic_data(n_samples=200, n_features=20, seed=42):
     torch.manual_seed(seed)
@@ -125,7 +127,16 @@ def main():
         os.makedirs(save_dir, exist_ok=True)
         model_engine.save_checkpoint(save_dir)
 
-    print("Training completed.")
+    if local_rank == 0:
+        print(f"Training completed.")
 
 if __name__ == "__main__":
-    main()
+    main()    
+    try:
+        dist.barrier()
+    except Exception:
+        pass
+    try:
+        dist.destroy_process_group()
+    except Exception:
+        pass
