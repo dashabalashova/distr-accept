@@ -173,7 +173,7 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ needs.test-on-slurm.result == 'success' }}
     env:
-      IMAGE_NAME: ${{ env.IMAGE_NAME }}
+      IMAGE_NAME: ghcr.io/dashabalashova/deepspeed-train
       IMAGE_TAG: "latest"
     steps:
       - name: Download image artifact
