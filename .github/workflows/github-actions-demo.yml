@@ -18,13 +18,13 @@ env:
 
 jobs:
   build:
-    # name: Build image (runner)
-    # runs-on: self-hosted
-    # outputs:
-    #   image-tag: ${{ steps.set-tag.outputs.image_tag }}
-    # steps:
-    #   - name: Checkout
-    #     uses: actions/checkout@v4
+    name: Build image (runner)
+    runs-on: self-hosted
+    outputs:
+      image-tag: ${{ steps.set-tag.outputs.image_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
     #   - name: Set IMAGE_TAG
     #     id: set-tag
