@@ -13,7 +13,7 @@ permissions:
 env:
   IMAGE_NAME: deepspeed-train:latest
   REMOTE_DIR: /root/distr-accept
-  SLURM_WAIT_TIMEOUT_SECONDS: 1200
+  SLURM_WAIT_TIMEOUT_SECONDS: 1500
 
 jobs:
   build:
