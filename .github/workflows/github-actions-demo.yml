@@ -36,21 +36,21 @@ jobs:
       - name: Set up QEMU and buildx
         uses: docker/setup-buildx-action@v2
 
-      # - name: Build docker image (load into local docker daemon)
-      #   uses: docker/build-push-action@v5
-      #   with:
-      #     context: .
-      #     file: ./Dockerfile
-      #     push: false
-      #     load: true
-      #     tags: ${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}
+      - name: Build docker image (load into local docker daemon)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}
 
-      # - name: Create enroot squashfs (.sqsh) from local docker image
-      #   run: |
-      #     set -euo pipefail
-      #     SQSH_NAME="deepspeed-train.sqsh"
-      #     echo "Creating enroot squashfs: $SQSH_NAME from ${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
-      #     enroot import --output "$SQSH_NAME" "dockerd://${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
+      - name: Create enroot squashfs (.sqsh) from local docker image
+        run: |
+          set -euo pipefail
+          SQSH_NAME="deepspeed-train.sqsh"
+          echo "Creating enroot squashfs: $SQSH_NAME from ${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
+          enroot import --output "$SQSH_NAME" "dockerd://${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
 
       # --- directly copy to SLURM host from the self-hosted runner ---
       - name: Ensure remote dir exists (on SLURM host)
@@ -86,7 +86,7 @@ jobs:
           # optionally set port variable
           SSH_PORT="${{ secrets.SLURM_SSH_PORT || '22' }}"
 
-          touch deepspeed-train.sqsh
+          # touch deepspeed-train.sqsh
 
           # single file or directory; -P shows progress and partial transfer support
           rsync -avP -e "ssh -i ~/.ssh/slurm_key -p ${SSH_PORT} -o StrictHostKeyChecking=no" \
