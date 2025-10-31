@@ -76,6 +76,22 @@ jobs:
           source: "slurm_train.sbatch,docker.sh,push_container.sh,train.py"
           target: "${{ env.REMOTE_DIR }}"
           strip_components: 0
+      - name: Create image tar
+        run: |
+          set -euo pipefail
+          IMAGE_TAG="${{ steps.set-tag.outputs.image_tag }}"
+          IMAGE_FULL="${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
+          echo "Saving image ${IMAGE_FULL} -> image.tar"
+          docker save -o image.tar "${IMAGE_FULL}"
+          echo "Created image.tar:"
+          ls -lah image.tar
+          du -h image.tar || true
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-tar
+          path: image.tar
       # - name: Copy .sqsh to SLURM host with rsync (shows progress)
       #   run: |
       #     set -euo pipefail
