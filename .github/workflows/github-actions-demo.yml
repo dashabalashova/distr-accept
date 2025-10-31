@@ -93,7 +93,7 @@ jobs:
           target: "${{ env.REMOTE_DIR }}"
           strip_components: 0
 
-      - name: Run remote test: submit slurm job and wait
+      - name: Run remote test – submit slurm job and wait
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.SLURM_HOST }}
