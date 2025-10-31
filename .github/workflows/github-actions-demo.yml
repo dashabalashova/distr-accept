@@ -47,11 +47,9 @@ jobs:
 
       - name: Create enroot squashfs (.sqsh) from local docker image
         run: |
-          # Требуется, чтобы на self-hosted раннере были установлены enroot и доступ к docker daemon
           set -euo pipefail
           SQSH_NAME="deepspeed-train.sqsh"
-          echo "Creating enroot squashfs: $SQSH_NAME from ${IMAGE_NAME}:${IMAGE_TAG}"
-          # используем dockerd:// reference (enroot импортирует из локального docker daemon)
+          echo "Creating enroot squashfs: $SQSH_NAME from ${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
           enroot import --output "$SQSH_NAME" "dockerd://${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
 
       - name: Upload sqsh artifact
@@ -63,13 +61,26 @@ jobs:
   test-on-slurm:
     name: Test on remote SLURM
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Download image sqsh artifact
         uses: actions/download-artifact@v4
         with:
           name: image-sqsh
           path: .
+
+      - name: Ensure remote dir exists
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.SLURM_HOST }}
+          username: ${{ secrets.SLURM_USER }}
+          key: ${{ secrets.SLURM_SSH_KEY }}
+          port: ${{ secrets.SLURM_SSH_PORT }}
+          script: |
+            # создадим директорию (не упадёт, если уже есть)
+            mkdir -p "${{ env.REMOTE_DIR }}"
+            # если требуется создать как root и ваш ssh-пользователь не root, можно попробовать sudo:
+            # sudo mkdir -p "${{ env.REMOTE_DIR }}" || true
 
       - name: Copy sqsh + sbatch to SLURM host
         uses: appleboy/scp-action@v0.1.7
@@ -82,7 +93,7 @@ jobs:
           target: "${{ env.REMOTE_DIR }}"
           strip_components: 0
 
-      - name: Run remote test – submit slurm job and wait
+      - name: Run remote test: submit slurm job and wait
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.SLURM_HOST }}
@@ -97,7 +108,6 @@ jobs:
             # убедимся, что файлы на месте
             ls -lah .
 
-            # submit job
             JOB_ID=$(sbatch --parsable slurm_train.sbatch)
             if [ -z "$JOB_ID" ]; then
               echo "Failed to submit job"
@@ -126,7 +136,6 @@ jobs:
                     exit $EXIT_RC
                   fi
                 else
-                  # если sacct недоступен, считаем, что задача завершилась успешно
                   echo "sacct not available; assuming success"
                   exit 0
                 fi
