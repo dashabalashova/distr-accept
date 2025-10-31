@@ -82,7 +82,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Run remote test: submit slurm job and wait
+      - name: Run remote test – submit slurm job and wait
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.SLURM_HOST }}
