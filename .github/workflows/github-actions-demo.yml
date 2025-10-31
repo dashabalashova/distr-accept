@@ -1,8 +1,9 @@
-name: SLURM CI — build → test → push
+name: SLURM CI – build -> test -> push
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -30,7 +31,8 @@ jobs:
         run: |
           IMAGE_TAG="staging-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::8}"
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
-          echo "::set-output name=image_tag::$IMAGE_TAG"
+          # publish step output via GITHUB_OUTPUT (modern replacement for ::set-output)
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       - name: Set up QEMU and buildx
         uses: docker/setup-buildx-action@v2
@@ -42,10 +44,10 @@ jobs:
           file: ./Dockerfile
           push: false
           load: true
-          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          tags: ${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}
 
       - name: Save image to tar
-        run: docker save ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} -o image.tar
+        run: docker save ${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }} -o image.tar
 
       - name: Upload image artifact
         uses: actions/upload-artifact@v4
@@ -87,11 +89,13 @@ jobs:
             mkdir -p "${{ env.REMOTE_DIR }}"
             cd "${{ env.REMOTE_DIR }}"
 
+            # try to load docker image (may fail if no docker on host; that's OK)
             docker load -i image.tar || true
 
             JOB_ID=$(sbatch --parsable slurm_train.sbatch)
             if [ -z "$JOB_ID" ]; then
-              echo "Failed to submit job"; exit 2
+              echo "Failed to submit job"
+              exit 2
             fi
             echo "Submitted job id: $JOB_ID"
 
