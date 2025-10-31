@@ -122,10 +122,8 @@ jobs:
                 -e "s/^#SBATCH --gres=gpu:.*/#SBATCH --gres=gpu:${GPUS}/" \
                 slurm_train.sbatch > slurm_train.submit.sbatch
             
-            # sbatch --export=ALL,GPUS_PER_NODE="$GPUS",NNODES="$NODES" slurm_train.submit.sbatch
             JOB_ID=$(sbatch --export=ALL,GPUS_PER_NODE="$GPUS",NNODES="$NODES" slurm_train.submit.sbatch)
 
-            # JOB_ID=$(sbatch --parsable slurm_train.sbatch)
             if [ -z "$JOB_ID" ]; then
               echo "Failed to submit job"
               exit 2
@@ -168,3 +166,62 @@ jobs:
               echo "Job $JOB_ID state: $STATE — sleeping 10s..."
               sleep 10
             done
+
+  publish:
+    name: Publish image to GHCR (only if SLURM job success)
+    needs: [build, test-on-slurm]
+    runs-on: ubuntu-latest
+    if: ${{ needs.test-on-slurm.result == 'success' }}
+    env:
+      IMAGE_NAME: ${{ env.IMAGE_NAME }}
+      IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
+    steps:
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: image-tar
+          path: .
+
+      - name: Load image into docker
+        run: |
+          set -euo pipefail
+          echo "Loading image tar..."
+          docker load -i image.tar
+          echo "Local images after load:"
+          docker images --format 'table {{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}'
+
+      - name: Login to GHCR
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag & push image (original tag and :latest)
+        run: |
+          set -euo pipefail
+          ORIG_TAG="${IMAGE_NAME}:${IMAGE_TAG}"
+          LATEST_TAG="${IMAGE_NAME}:latest"
+          echo "Tagging (ensuring original tag exists locally): ${ORIG_TAG}"
+          # If the loaded image has the original tag, this is a no-op; otherwise tag by image id (try to find it)
+          if ! docker image inspect "${ORIG_TAG}" >/dev/null 2>&1; then
+            # try to find the image id by repo (first match)
+            IMG_ID=$(docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | awk -v repo="${IMAGE_NAME}" '$1 ~ repo { print $2; exit }' || true)
+            if [ -z "$IMG_ID" ]; then
+              echo "Cannot find loaded image to tag"
+              docker images --all
+              exit 1
+            fi
+            docker tag "$IMG_ID" "${ORIG_TAG}"
+          fi
+
+          echo "Pushing ${ORIG_TAG}"
+          docker push "${ORIG_TAG}"
+
+          echo "Tagging as latest: ${LATEST_TAG}"
+          docker tag "${ORIG_TAG}" "${LATEST_TAG}"
+          echo "Pushing ${LATEST_TAG}"
+          docker push "${LATEST_TAG}"
+
+      - name: Done
+        run: echo "Image pushed to GHCR: ${IMAGE_NAME}:latest (and original tag ${IMAGE_TAG})"
