@@ -1,7 +1,8 @@
+name: SLURM CI — build → test → push
+
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -9,7 +10,6 @@ permissions:
   packages: write
   id-token: write
 
-# Глобальные переменные (IMAGE_NAME без тега)
 env:
   IMAGE_NAME: ghcr.io/dashabalashova/deepspeed-train
   REMOTE_DIR: /root/distr-accept
@@ -28,7 +28,6 @@ jobs:
       - name: Set IMAGE_TAG
         id: set-tag
         run: |
-          # формируем компактный, неизменяемый тег: staging-<run>-<short-sha>
           IMAGE_TAG="staging-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::8}"
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
           echo "::set-output name=image_tag::$IMAGE_TAG"
@@ -36,7 +35,7 @@ jobs:
       - name: Set up QEMU and buildx
         uses: docker/setup-buildx-action@v2
 
-      - name: Build docker image (load into local docker)
+      - name: Build docker image (load into local docker daemon)
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -46,5 +45,102 @@ jobs:
           tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 
       - name: Save image to tar
+        run: docker save ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} -o image.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-tar
+          path: image.tar
+
+  test-on-slurm:
+    name: Test on remote SLURM
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download image tar
+        uses: actions/download-artifact@v4
+        with:
+          name: image-tar
+          path: .
+
+      - name: Copy image + sbatch to SLURM host
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SLURM_HOST }}
+          username: ${{ secrets.SLURM_USER }}
+          key: ${{ secrets.SLURM_SSH_KEY }}
+          port: ${{ secrets.SLURM_SSH_PORT }}
+          source: "image.tar,slurm_train.sbatch,docker.sh,push_container.sh"
+          target: "${{ env.REMOTE_DIR }}"
+          strip_components: 0
+
+      - name: Run remote test: load image, submit slurm job and wait
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.SLURM_HOST }}
+          username: ${{ secrets.SLURM_USER }}
+          key: ${{ secrets.SLURM_SSH_KEY }}
+          port: ${{ secrets.SLURM_SSH_PORT }}
+          script: |
+            set -euo pipefail
+            mkdir -p "${{ env.REMOTE_DIR }}"
+            cd "${{ env.REMOTE_DIR }}"
+
+            docker load -i image.tar || true
+
+            JOB_ID=$(sbatch --parsable slurm_train.sbatch)
+            if [ -z "$JOB_ID" ]; then
+              echo "Failed to submit job"; exit 2
+            fi
+            echo "Submitted job id: $JOB_ID"
+
+            START_TS=$(date +%s)
+            TIMEOUT=${{ env.SLURM_WAIT_TIMEOUT_SECONDS }}
+            while true; do
+              if squeue -j "$JOB_ID" -h -o "%T" >/dev/null 2>&1; then
+                STATE=$(squeue -j "$JOB_ID" -h -o "%T" | tr -d '\r')
+              else
+                STATE=""
+              fi
+
+              if [ -z "$STATE" ]; then
+                if command -v sacct >/dev/null 2>&1; then
+                  INFO=$(sacct -j "$JOB_ID" --format=JobID,State,ExitCode -n -P | head -n 1 || true)
+                  EXIT_RC=$(echo "$INFO" | awk -F'|' '{print $3}' | awk -F: '{print $1}')
+                  if [ -z "$EXIT_RC" ] || [ "$EXIT_RC" = "0" ]; then
+                    exit 0
+                  else
+                    exit $EXIT_RC
+                  fi
+                else
+                  exit 0
+                fi
+              fi
+
+              NOW_TS=$(date +%s)
+              if [ $((NOW_TS - START_TS)) -gt $TIMEOUT ]; then
+                scancel "$JOB_ID" || true
+                exit 124
+              fi
+
+              echo "Job $JOB_ID state: $STATE — sleeping 10s..."
+              sleep 10
+            done
+
+  push-to-ghcr:
+    name: Push image to GHCR (only when tests passed)
+    needs: test-on-slurm
+    if: ${{ needs.test-on-slurm.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.CR_PAT }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push image to GHCR
         run: |
-          docker save ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} -o image.tar
+          docker tag ${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image-tag }} ${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image-tag }}
+          docker push ${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image-tag }}
