@@ -52,24 +52,8 @@ jobs:
           echo "Creating enroot squashfs: $SQSH_NAME from ${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
           enroot import --output "$SQSH_NAME" "dockerd://${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
 
-      - name: Upload sqsh artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: image-sqsh
-          path: deepspeed-train.sqsh
-
-  test-on-slurm:
-    name: Test on remote SLURM
-    needs: build
-    runs-on: self-hosted
-    steps:
-      - name: Download image sqsh artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: image-sqsh
-          path: .
-
-      - name: Ensure remote dir exists
+      # --- directly copy to SLURM host from the self-hosted runner ---
+      - name: Ensure remote dir exists (on SLURM host)
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.SLURM_HOST }}
@@ -79,10 +63,10 @@ jobs:
           script: |
             # создадим директорию (не упадёт, если уже есть)
             mkdir -p "${{ env.REMOTE_DIR }}"
-            # если требуется создать как root и ваш ssh-пользователь не root, можно попробовать sudo:
+            # если нужно создать как root и ssh-пользователь не root — можно использовать sudo (требует sudo без пароля)
             # sudo mkdir -p "${{ env.REMOTE_DIR }}" || true
 
-      - name: Copy sqsh + sbatch to SLURM host
+      - name: Copy sqsh + sbatch to SLURM host (direct)
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SLURM_HOST }}
@@ -93,7 +77,12 @@ jobs:
           target: "${{ env.REMOTE_DIR }}"
           strip_components: 0
 
-      - name: Run remote test – submit slurm job and wait
+  test-on-slurm:
+    name: Test on remote SLURM
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run remote test: submit slurm job and wait
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.SLURM_HOST }}
@@ -151,20 +140,3 @@ jobs:
               echo "Job $JOB_ID state: $STATE — sleeping 10s..."
               sleep 10
             done
-
-  # push-to-ghcr:
-  #   name: Push image to GHCR (only when tests passed)
-  #   needs: test-on-slurm
-  #   if: ${{ needs.test-on-slurm.result == 'success' }}
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-  #
-  #     - name: Log in to GHCR
-  #       run: echo "${{ secrets.CR_PAT }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-  #
-  #     - name: Push image to GHCR
-  #       run: |
-  #         docker tag ${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image-tag }} ${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image-tag }}
-  #         docker push ${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image-tag }}
