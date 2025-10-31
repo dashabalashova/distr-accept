@@ -1,17 +1,5 @@
-name: SLURM CI — build -> test -> push
-
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  packages: write
-  id-token: write
-
 env:
-  IMAGE_NAME: deepspeed-train:latest
+  IMAGE_NAME: ghcr.io/dashabalashova/deepspeed-train
   REMOTE_DIR: /root/distr-accept
   SLURM_WAIT_TIMEOUT_SECONDS: 1200
 
@@ -23,17 +11,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set IMAGE_TAG (short sha + run number)
+        run: echo "IMAGE_TAG=staging-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::8}" >> $GITHUB_ENV
+
       - name: Set up QEMU and buildx
         uses: docker/setup-buildx-action@v2
 
-      - name: Build docker image (local)
+      - name: Build docker image (local -> load into docker)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: false
-          tags: ghcr.io/dashabalashova/deepspeed-train:latest
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 
       - name: Save image to tar
         run: |
-          docker save ghcr.io/dashabalashova/deepspeed-train:latest -o image.tar
+          docker save ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} -o image.tar
