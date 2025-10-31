@@ -167,20 +167,20 @@ jobs:
               sleep 10
             done
 
-  # publish:
-  #   name: Publish image to GHCR (only if SLURM job success)
-  #   needs: [build, test-on-slurm]
-  #   runs-on: ubuntu-latest
-  #   if: ${{ needs.test-on-slurm.result == 'success' }}
-  #   env:
-  #     IMAGE_NAME: ${{ env.IMAGE_NAME }}
-  #     IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
-  #   steps:
-  #     - name: Download image artifact
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: image-tar
-  #         path: .
+  publish:
+    name: Publish image to GHCR (only if SLURM job success)
+    needs: [build, test-on-slurm]
+    runs-on: ubuntu-latest
+    if: ${{ needs.test-on-slurm.result == 'success' }}
+    env:
+      IMAGE_NAME: ${{ env.IMAGE_NAME }}
+      IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
+    steps:
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: image-tar
+          path: .
 
   #     - name: Load image into docker
   #       run: |
