@@ -35,7 +35,8 @@ if srun --jobid $SLURM_JOBID --container-image="$SLURM_SUBMIT_DIR/deepspeed-trai
         bash -c '$LAUNCHER --node_rank $SLURM_PROCID $CMD'; then
   echo "✅ job success"
 else
-  echo "❌ job fail"  
+  echo "❌ job fail"
+fi
   
   # ./push_container.sh
   # PUSH_SCRIPT="${SLURM_SUBMIT_DIR}/push_container.sh"
