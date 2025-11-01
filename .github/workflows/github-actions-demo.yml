@@ -88,7 +88,7 @@ jobs:
 
         shell: bash
 
-    test-on-slurm:
+  test-on-slurm:
     name: Test on remote SLURM
     needs: build
     runs-on: self-hosted
