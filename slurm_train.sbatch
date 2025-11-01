@@ -34,12 +34,15 @@ if srun --jobid $SLURM_JOBID --container-image="$SLURM_SUBMIT_DIR/deepspeed-trai
         --container-mounts="$SLURM_SUBMIT_DIR:/workspace" \
         bash -c '$LAUNCHER --node_rank $SLURM_PROCID $CMD'; then
   echo "✅ job success"
-  #./push_container.sh
-  PUSH_SCRIPT="${SLURM_SUBMIT_DIR}/push_container.sh"
-  chmod +x "$PUSH_SCRIPT"
-  echo "pushing container ..."
-  bash -c "$PUSH_SCRIPT"
-  echo "✅ container pushed"
 else
-  echo "❌ job failed"
-fi
+  echo "❌ job fail"  
+  
+  # ./push_container.sh
+  # PUSH_SCRIPT="${SLURM_SUBMIT_DIR}/push_container.sh"
+  # chmod +x "$PUSH_SCRIPT"
+  # echo "pushing container ..."
+  # bash -c "$PUSH_SCRIPT"
+  # echo "✅ container pushed"
+# else
+  # echo "❌ job failed"
+# fi

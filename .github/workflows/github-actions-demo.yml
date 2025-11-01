@@ -71,9 +71,28 @@ jobs:
           username: ${{ secrets.SLURM_USER }}
           key: ${{ secrets.SLURM_SSH_KEY }}
           port: ${{ secrets.SLURM_SSH_PORT }}
-          source: "${{ env.SQSH_NAME }},slurm_train.sbatch,train.py"
+          source: "slurm_train.sbatch,train.py"
           target: "${{ env.REMOTE_DIR }}"
           strip_components: 0
+
+      - name: Copy .sqsh to SLURM host with rsync (shows progress)
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SLURM_SSH_KEY }}" > ~/.ssh/slurm_key
+          chmod 600 ~/.ssh/slurm_key
+
+          # optionally set port variable
+          SSH_PORT="${{ secrets.SLURM_SSH_PORT || '22' }}"
+
+          # touch deepspeed-train-2.sqsh
+
+          # single file or directory; -P shows progress and partial transfer support
+          rsync -avP -e "ssh -i ~/.ssh/slurm_key -p ${SSH_PORT} -o StrictHostKeyChecking=no" \
+            deepspeed-train-2.sqsh \
+            "${{ secrets.SLURM_USER }}@${{ secrets.SLURM_HOST }}:${{ env.REMOTE_DIR }}"
+
+        shell: bash
 
   test-on-slurm:
     name: Test on remote SLURM
