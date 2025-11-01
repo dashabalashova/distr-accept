@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# train.py - minimal DeepSpeed-wrapped training on simulated binary data.
+# train.py - minimal DeepSpeed-wrapped training on simulated binary data
 
 import argparse
 import os
@@ -130,8 +130,8 @@ def main():
     if local_rank == 0:
         print(f"Training completed.")
         print('🐯')
-        print(🐯🐯)
-        print('🐯🐯🐯')
+        # print(🐯🐯)
+        # print('🐯🐯🐯')
 
 if __name__ == "__main__":
     main()    
