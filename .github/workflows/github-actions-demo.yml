@@ -18,7 +18,6 @@ env:
 jobs:
   build:
     name: Build image (runner)
-    # <- ключевой момент: указать тот же label для runner'а, что и в publish
     runs-on: [self-hosted, docker-host]
     outputs:
       image-tag: ${{ steps.set-tag.outputs.image_tag }}
@@ -29,7 +28,6 @@ jobs:
       - name: Set IMAGE_TAG
         id: set-tag
         run: |
-          # IMAGE_TAG="staging-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::8}"
           IMAGE_TAG="latest"
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
           echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
@@ -54,7 +52,6 @@ jobs:
           enroot import --output "$SQSH_NAME" "dockerd://${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
           echo "SQSH_NAME=$SQSH_NAME" >> $GITHUB_ENV
 
-      # --- прямо копируем .sqsh + sbatch + train.py на SLURM-хост ---
       - name: Ensure remote dir exists (on SLURM host)
         uses: appleboy/ssh-action@v0.1.7
         with:
@@ -83,25 +80,26 @@ jobs:
           echo "${{ secrets.SLURM_SSH_KEY }}" > ~/.ssh/slurm_key
           chmod 600 ~/.ssh/slurm_key
 
-          # optionally set port variable
           SSH_PORT="${{ secrets.SLURM_SSH_PORT || '22' }}"
 
-          # touch deepspeed-train-3.sqsh
-
-          # single file or directory; -P shows progress and partial transfer support
           rsync -avP -e "ssh -i ~/.ssh/slurm_key -p ${SSH_PORT} -o StrictHostKeyChecking=no" \
             deepspeed-train-3.sqsh \
             "${{ secrets.SLURM_USER }}@${{ secrets.SLURM_HOST }}:${{ env.REMOTE_DIR }}"
 
         shell: bash
 
-  test-on-slurm:
+    test-on-slurm:
     name: Test on remote SLURM
     needs: build
     runs-on: self-hosted
+    outputs:
+      slurm_status: ${{ steps.parse.outputs.slurm_status }}
+      slurm_exit_code: ${{ steps.parse.outputs.slurm_exit_code }}
     steps:
       - name: Run remote test – submit slurm job and wait
+        id: run-remote
         uses: appleboy/ssh-action@v0.1.7
+        continue-on-error: true                # <-- позволяем шагу завершиться не-0, чтобы потом распарсить stdout
         with:
           host: ${{ secrets.SLURM_HOST }}
           username: ${{ secrets.SLURM_USER }}
@@ -117,10 +115,11 @@ jobs:
             sed -e "s/^#SBATCH --nodes=.*/#SBATCH --nodes=${NODES}/" \
                 -e "s/^#SBATCH --gres=gpu:.*/#SBATCH --gres=gpu:${GPUS}/" \
                 slurm_train.sbatch > slurm_train.submit.sbatch
-            SBATCH_OUT=$(sbatch --export=ALL,GPUS_PER_NODE="$GPUS",NNODES="$NODES" slurm_train.submit.sbatch)
+            SBATCH_OUT=$(sbatch --export=ALL,GPUS_PER_NODE="$GPUS",NNODES="$NODES" slurm_train.submit.sbatch || true)
             if [ -z "$SBATCH_OUT" ]; then
               echo "Failed to submit job"
-              exit 2
+              echo "JOB_SUBMIT_RESULT=failed"
+              exit 3
             fi
             JOB_ID=$(echo "$SBATCH_OUT" | awk '{print $NF}')
             echo "Submitted job id: $JOB_ID"
@@ -158,12 +157,36 @@ jobs:
               sleep 10
             done
 
+      - name: Parse SLURM result from SSH step stdout
+        id: parse
+        run: |
+          # appleboy/ssh-action обычно возвращает stdout в steps.run-remote.outputs.stdout
+          STDOUT="${{ steps.run-remote.outputs.stdout || '' }}"
+
+          echo "---- remote stdout (truncated) ----"
+          echo "${STDOUT}" | sed -n '1,200p'
+          echo "-----------------------------------"
+
+          if echo "$STDOUT" | grep -q "Job finished successfully"; then
+            echo "slurm_status=success" >> $GITHUB_OUTPUT
+            echo "slurm_exit_code=0" >> $GITHUB_OUTPUT
+          elif echo "$STDOUT" | grep -q "Job failed with exit code"; then
+            EXIT=$(echo "$STDOUT" | sed -n 's/.*Job failed with exit code \([0-9][0-9]*\).*/\1/p')
+            echo "slurm_status=failure" >> $GITHUB_OUTPUT
+            echo "slurm_exit_code=${EXIT:-1}" >> $GITHUB_OUTPUT
+          elif echo "$STDOUT" | grep -q "Timeout reached, cancelling job"; then
+            echo "slurm_status=timeout" >> $GITHUB_OUTPUT
+            echo "slurm_exit_code=124" >> $GITHUB_OUTPUT
+          else
+            # если ничего не понятно — считаем как unknown (без пуша)
+            echo "slurm_status=unknown" >> $GITHUB_OUTPUT
+            echo "slurm_exit_code=2" >> $GITHUB_OUTPUT
+          fi
+
   publish:
     name: Publish image to GHCR (only if SLURM job success)
     needs: [build, test-on-slurm]
-    # <- публикуем только если SLURM тест успешен
-    if: ${{ needs.test-on-slurm.result == 'success' }}
-    # <- снова тот же раннер/label, чтобы иметь доступ к локальному docker daemon
+    if: ${{ needs.test-on-slurm.outputs.slurm_status == 'success' }}
     runs-on: [self-hosted, docker-host]
     env:
       IMAGE_NAME: ghcr.io/dashabalashova/deepspeed-train-3
@@ -175,7 +198,6 @@ jobs:
           echo "IMAGE_NAME=${IMAGE_NAME}"
           echo "IMAGE_TAG=${IMAGE_TAG}"
           docker --version || true
-          # show local images for debugging
           docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}' | sed -n '1,50p' || true
 
       - name: Ensure image exists locally and push to GHCR
