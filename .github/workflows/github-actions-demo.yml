@@ -2,8 +2,7 @@ name: SLURM CI – build -> test -> push
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -19,7 +18,8 @@ env:
 jobs:
   build:
     name: Build image (runner)
-    runs-on: self-hosted
+    # <- ключевой момент: указать тот же label для runner'а, что и в publish
+    runs-on: [self-hosted, docker-host]
     outputs:
       image-tag: ${{ steps.set-tag.outputs.image_tag }}
     steps:
@@ -48,11 +48,12 @@ jobs:
       - name: Create enroot squashfs (.sqsh) from local docker image
         run: |
           set -euo pipefail
-          SQSH_NAME="deepspeed-train-2.sqsh"
+          SQSH_NAME="deepspeed-train-${{ steps.set-tag.outputs.image_tag }}.sqsh"
           echo "Creating enroot squashfs: $SQSH_NAME from ${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
           enroot import --output "$SQSH_NAME" "dockerd://${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
+          echo "SQSH_NAME=$SQSH_NAME" >> $GITHUB_ENV
 
-      # --- directly copy to SLURM host from the self-hosted runner ---
+      # --- прямо копируем .sqsh + sbatch + train.py на SLURM-хост ---
       - name: Ensure remote dir exists (on SLURM host)
         uses: appleboy/ssh-action@v0.1.7
         with:
@@ -61,60 +62,23 @@ jobs:
           key: ${{ secrets.SLURM_SSH_KEY }}
           port: ${{ secrets.SLURM_SSH_PORT }}
           script: |
-            # создадим директорию (не упадёт, если уже есть)
             mkdir -p "${{ env.REMOTE_DIR }}"
-            # если нужно создать как root и ssh-пользователь не root — можно использовать sudo (требует sudo без пароля)
-            # sudo mkdir -p "${{ env.REMOTE_DIR }}" || true
 
-      - name: Copy sqsh + sbatch to SLURM host (direct)
+      - name: Copy sqsh + sbatch + train.py to SLURM host (direct)
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SLURM_HOST }}
           username: ${{ secrets.SLURM_USER }}
           key: ${{ secrets.SLURM_SSH_KEY }}
           port: ${{ secrets.SLURM_SSH_PORT }}
-          source: "slurm_train.sbatch,docker.sh,push_container.sh,train.py"
+          source: "${{ env.SQSH_NAME }},slurm_train.sbatch,train.py"
           target: "${{ env.REMOTE_DIR }}"
           strip_components: 0
-      - name: Create image tar
-        run: |
-          set -euo pipefail
-          IMAGE_TAG="${{ steps.set-tag.outputs.image_tag }}"
-          IMAGE_FULL="${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
-          echo "Saving image ${IMAGE_FULL} -> image.tar"
-          docker save -o image.tar "${IMAGE_FULL}"
-          echo "Created image.tar:"
-          ls -lah image.tar
-          du -h image.tar || true
-
-      - name: Upload image artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: image-tar
-          path: image.tar
-      # - name: Copy .sqsh to SLURM host with rsync (shows progress)
-      #   run: |
-      #     set -euo pipefail
-      #     mkdir -p ~/.ssh
-      #     echo "${{ secrets.SLURM_SSH_KEY }}" > ~/.ssh/slurm_key
-      #     chmod 600 ~/.ssh/slurm_key
-
-      #     # optionally set port variable
-      #     SSH_PORT="${{ secrets.SLURM_SSH_PORT || '22' }}"
-
-      #     # touch deepspeed-train-2.sqsh
-
-      #     # single file or directory; -P shows progress and partial transfer support
-      #     rsync -avP -e "ssh -i ~/.ssh/slurm_key -p ${SSH_PORT} -o StrictHostKeyChecking=no" \
-      #       deepspeed-train-2.sqsh \
-      #       "${{ secrets.SLURM_USER }}@${{ secrets.SLURM_HOST }}:${{ env.REMOTE_DIR }}"
-
-      #   shell: bash
 
   test-on-slurm:
     name: Test on remote SLURM
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Run remote test – submit slurm job and wait
         uses: appleboy/ssh-action@v0.1.7
@@ -127,25 +91,19 @@ jobs:
             set -euo pipefail
             mkdir -p "${{ env.REMOTE_DIR }}"
             cd "${{ env.REMOTE_DIR }}"
-
-            # убедимся, что файлы на месте
             ls -lah .
-
             NODES=$(scontrol show nodes | grep -c '^NodeName')
             GPUS=$(scontrol show nodes | sed -n 's/.*CfgTRES=.*gres\/gpu=\([0-9][0-9]*\).*/\1/p' | head -n1)
-            
             sed -e "s/^#SBATCH --nodes=.*/#SBATCH --nodes=${NODES}/" \
                 -e "s/^#SBATCH --gres=gpu:.*/#SBATCH --gres=gpu:${GPUS}/" \
                 slurm_train.sbatch > slurm_train.submit.sbatch
-            
-            JOB_ID=$(sbatch --export=ALL,GPUS_PER_NODE="$GPUS",NNODES="$NODES" slurm_train.submit.sbatch)
-
-            if [ -z "$JOB_ID" ]; then
+            SBATCH_OUT=$(sbatch --export=ALL,GPUS_PER_NODE="$GPUS",NNODES="$NODES" slurm_train.submit.sbatch)
+            if [ -z "$SBATCH_OUT" ]; then
               echo "Failed to submit job"
               exit 2
             fi
+            JOB_ID=$(echo "$SBATCH_OUT" | awk '{print $NF}')
             echo "Submitted job id: $JOB_ID"
-
             START_TS=$(date +%s)
             TIMEOUT=${{ env.SLURM_WAIT_TIMEOUT_SECONDS }}
             while true; do
@@ -154,7 +112,6 @@ jobs:
               else
                 STATE=""
               fi
-
               if [ -z "$STATE" ]; then
                 if command -v sacct >/dev/null 2>&1; then
                   INFO=$(sacct -j "$JOB_ID" --format=JobID,State,ExitCode -n -P | head -n 1 || true)
@@ -171,14 +128,12 @@ jobs:
                   exit 0
                 fi
               fi
-
               NOW_TS=$(date +%s)
               if [ $((NOW_TS - START_TS)) -gt $TIMEOUT ]; then
                 echo "Timeout reached, cancelling job $JOB_ID"
                 scancel "$JOB_ID" || true
                 exit 124
               fi
-
               echo "Job $JOB_ID state: $STATE — sleeping 10s..."
               sleep 10
             done
@@ -186,51 +141,35 @@ jobs:
   publish:
     name: Publish image to GHCR (only if SLURM job success)
     needs: [build, test-on-slurm]
-    runs-on: ubuntu-latest
+    # <- публикуем только если SLURM тест успешен
     if: ${{ needs.test-on-slurm.result == 'success' }}
+    # <- снова тот же раннер/label, чтобы иметь доступ к локальному docker daemon
+    runs-on: [self-hosted, docker-host]
     env:
       IMAGE_NAME: ghcr.io/dashabalashova/deepspeed-train
       IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
     steps:
       - name: Debug vars
         run: |
-          echo "Will publish image if remote push succeeds"
+          echo "Will publish image from local Docker daemon"
           echo "IMAGE_NAME=${IMAGE_NAME}"
           echo "IMAGE_TAG=${IMAGE_TAG}"
-          echo "REMOTE_DIR=${{ env.REMOTE_DIR }}"
+          docker --version || true
+          # show local images for debugging
+          docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}' | sed -n '1,50p' || true
 
-      - name: Push from SLURM host (run push_container.sh)
-        uses: appleboy/ssh-action@v0.1.7
-        with:
-          host: ${{ secrets.SLURM_HOST }}
-          username: ${{ secrets.SLURM_USER }}
-          key: ${{ secrets.SLURM_SSH_KEY }}
-          port: ${{ secrets.SLURM_SSH_PORT }}
-          script: |
-            set -euo pipefail
-            cd "${{ env.REMOTE_DIR }}"
-            echo "PWD: $(pwd)"
-            ls -lah
-
-            # # ensure GHCR token secret exists on Actions side
-            # if [ -z "${{ secrets.GHCR_TOKEN }}" ]; then
-            #   echo "ERROR: secrets.GHCR_TOKEN is not set in repository. Cannot login to GHCR."
-            #   exit 1
-            # fi
-
-            echo "Logging into ghcr.io as ${{ github.actor }}..."
-            echo "${{ secrets.CR_PAT }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-
-            # pass IMAGE_TAG and IMAGE_NAME as concrete values
-            IMAGE_TAG="${{ needs.build.outputs.image-tag }}"
-            IMAGE_NAME="ghcr.io/dashabalashova/deepspeed-train"
-
-            echo "Calling push_container.sh with args: <tag>='${IMAGE_TAG}' <image>='${IMAGE_NAME}'"
-            if [ -x ./push_container.sh ]; then
-              ./push_container.sh "${IMAGE_TAG}" "${IMAGE_NAME}"
-            else
-              echo "push_container.sh not found or not executable in ${PWD}"
-              echo "Files in dir:"
-              ls -lah
-              exit 1
-            fi
+      - name: Ensure image exists locally and push to GHCR
+        env:
+          CR_PAT: ${{ secrets.CR_PAT }}
+        run: |
+          set -euo pipefail
+          TAG="${IMAGE_NAME}:${IMAGE_TAG}"
+          if ! docker image inspect "$TAG" >/dev/null 2>&1; then
+            echo "Image $TAG not found in local docker. Available images:"
+            docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}' || true
+            exit 2
+          fi
+          echo "Logging in to ghcr.io"
+          echo "${CR_PAT}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "Pushing $TAG"
+          docker push "$TAG"
