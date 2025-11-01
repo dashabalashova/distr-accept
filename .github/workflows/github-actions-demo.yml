@@ -11,7 +11,7 @@ permissions:
   id-token: write
 
 env:
-  IMAGE_NAME: ghcr.io/dashabalashova/deepspeed-train
+  IMAGE_NAME: ghcr.io/dashabalashova/deepspeed-train-3
   REMOTE_DIR: /root/distr-accept
   SLURM_WAIT_TIMEOUT_SECONDS: 1200
 
@@ -29,7 +29,8 @@ jobs:
       - name: Set IMAGE_TAG
         id: set-tag
         run: |
-          IMAGE_TAG="staging-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::8}"
+          # IMAGE_TAG="staging-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::8}"
+          IMAGE_TAG="latest"
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
           echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
@@ -48,7 +49,7 @@ jobs:
       - name: Create enroot squashfs (.sqsh) from local docker image
         run: |
           set -euo pipefail
-          SQSH_NAME="deepspeed-train-${{ steps.set-tag.outputs.image_tag }}.sqsh"
+          SQSH_NAME="deepspeed-train-3-${{ steps.set-tag.outputs.image_tag }}.sqsh"
           echo "Creating enroot squashfs: $SQSH_NAME from ${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
           enroot import --output "$SQSH_NAME" "dockerd://${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
           echo "SQSH_NAME=$SQSH_NAME" >> $GITHUB_ENV
@@ -85,11 +86,11 @@ jobs:
           # optionally set port variable
           SSH_PORT="${{ secrets.SLURM_SSH_PORT || '22' }}"
 
-          # touch deepspeed-train-2.sqsh
+          # touch deepspeed-train-3.sqsh
 
           # single file or directory; -P shows progress and partial transfer support
           rsync -avP -e "ssh -i ~/.ssh/slurm_key -p ${SSH_PORT} -o StrictHostKeyChecking=no" \
-            deepspeed-train-2.sqsh \
+            deepspeed-train-3.sqsh \
             "${{ secrets.SLURM_USER }}@${{ secrets.SLURM_HOST }}:${{ env.REMOTE_DIR }}"
 
         shell: bash
@@ -165,7 +166,7 @@ jobs:
     # <- снова тот же раннер/label, чтобы иметь доступ к локальному docker daemon
     runs-on: [self-hosted, docker-host]
     env:
-      IMAGE_NAME: ghcr.io/dashabalashova/deepspeed-train
+      IMAGE_NAME: ghcr.io/dashabalashova/deepspeed-train-3
       IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
     steps:
       - name: Debug vars

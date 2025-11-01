@@ -30,7 +30,7 @@ export CMD=" \
 
 echo $CMD
 
-if srun --jobid $SLURM_JOBID --container-image="$SLURM_SUBMIT_DIR/deepspeed-train-2.sqsh" \
+if srun --jobid $SLURM_JOBID --container-image="$SLURM_SUBMIT_DIR/deepspeed-train-3.sqsh" \
         --container-mounts="$SLURM_SUBMIT_DIR:/workspace" \
         bash -c '$LAUNCHER --node_rank $SLURM_PROCID $CMD'; then
   echo "✅ job success"
