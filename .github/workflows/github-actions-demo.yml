@@ -49,7 +49,7 @@ jobs:
       - name: Create enroot squashfs (.sqsh) from local docker image
         run: |
           set -euo pipefail
-          SQSH_NAME="deepspeed-train-3-${{ steps.set-tag.outputs.image_tag }}.sqsh"
+          SQSH_NAME="deepspeed-train-3.sqsh"
           echo "Creating enroot squashfs: $SQSH_NAME from ${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
           enroot import --output "$SQSH_NAME" "dockerd://${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image_tag }}"
           echo "SQSH_NAME=$SQSH_NAME" >> $GITHUB_ENV
